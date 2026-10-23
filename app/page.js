@@ -4,10 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { computeBalances, settleUp } from '../lib/split';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
-const DEFAULT_PEOPLE = ['Aisha', 'Raj', 'Priya', 'You'];
 const STORAGE_KEYS = {
   selectedGroup: 'splitsmart.selectedGroup',
-  peoplePrefix: 'splitsmart.people.',
 };
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -36,6 +34,41 @@ function normalizeExpense(row) {
     amount: Number(row.amount),
     splitBetween: row.split_between || [],
   };
+}
+
+function nameFromEmail(email) {
+  const localPart = String(email || '').split('@')[0] || '';
+  const name = localPart
+    .replace(/[._+-]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+  return name || 'Member';
+}
+
+function normalizeMembers(rows) {
+  const members = (rows || []).map((row) => ({
+    userId: row.user_id,
+    email: row.member_email || '',
+    name: row.member_email
+      ? nameFromEmail(row.member_email)
+      : `Member ${String(row.user_id).slice(0, 6)}`,
+  }));
+  const nameCounts = new Map();
+
+  for (const member of members) {
+    nameCounts.set(member.name, (nameCounts.get(member.name) || 0) + 1);
+  }
+
+  return members.map((member) => ({
+    ...member,
+    name: nameCounts.get(member.name) > 1 && member.email.includes('@')
+      ? `${member.name} (${member.email.split('@')[1]})`
+      : member.name,
+  }));
 }
 
 function parseExpense(text) {
@@ -81,8 +114,8 @@ function parseExpense(text) {
 }
 
 export default function Home() {
-  const [people, setPeople] = useState(DEFAULT_PEOPLE);
-  const [newPerson, setNewPerson] = useState('');
+  const [groupMembers, setGroupMembers] = useState([]);
+  const [membersLoading, setMembersLoading] = useState(false);
   const [aiText, setAiText] = useState('');
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -90,22 +123,26 @@ export default function Home() {
   const [authBusy, setAuthBusy] = useState(false);
   const [expenses, setExpenses] = useState([]);
   const [expensesLoading, setExpensesLoading] = useState(false);
-  const [peopleGroupId, setPeopleGroupId] = useState('');
   const [groups, setGroups] = useState([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState('');
+  const [showGroupPicker, setShowGroupPicker] = useState(true);
   const [newGroupName, setNewGroupName] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [manualExpense, setManualExpense] = useState({
     description: '',
     amount: '',
-    paidBy: 'You',
-    splitBetween: ['You'],
+    paidBy: '',
+    splitBetween: [],
   });
   const [error, setError] = useState('');
   const ownerEmail = typeof user?.user_metadata?.unverified_email === 'string'
     ? user.user_metadata.unverified_email.trim().toLowerCase()
     : '';
+  const people = useMemo(() => groupMembers.map((member) => member.name), [groupMembers]);
+  const activeGroup = groups.find((group) => group.id === activeGroupId);
+  const currentPerson = groupMembers.find((member) => member.userId === user?.id)?.name
+    || nameFromEmail(ownerEmail);
 
   useEffect(() => {
     let supabase;
@@ -128,7 +165,9 @@ export default function Home() {
       if (!mounted) return;
       clearTimeout(sessionTimeout);
       setUser(session?.user || null);
+      setShowGroupPicker(true);
       setExpenses([]);
+      setGroupMembers([]);
       setExpensesLoading(Boolean(session?.user));
       setAuthLoading(false);
       setError('');
@@ -141,6 +180,7 @@ export default function Home() {
         setError(`Could not check sign-in status: ${sessionError.message}`);
       }
       setUser(session?.user || null);
+      setShowGroupPicker(true);
       setExpensesLoading(Boolean(session?.user));
       setAuthLoading(false);
     }).catch((sessionError) => {
@@ -162,7 +202,13 @@ export default function Home() {
     setGroupsLoading(true);
 
     try {
-      const { data, error: groupsError } = await getSupabaseClient()
+      const supabase = getSupabaseClient();
+      const { error: restoreError } = await supabase.rpc('restore_email_group_memberships');
+      if (restoreError) {
+        throw new Error(`Could not restore group membership. Run supabase/schema_hour6_identity.sql: ${getErrorMessage(restoreError)}`);
+      }
+
+      const { data, error: groupsError } = await supabase
         .from('groups')
         .select('id, name, join_code, created_at')
         .order('created_at', { ascending: true });
@@ -190,8 +236,8 @@ export default function Home() {
       setGroups([]);
       setActiveGroupId('');
       setGroupsLoading(false);
-      setPeople(DEFAULT_PEOPLE);
-      setPeopleGroupId('');
+      setGroupMembers([]);
+      setMembersLoading(false);
       return;
     }
 
@@ -203,6 +249,41 @@ export default function Home() {
     }
     loadGroups(preferredGroupId);
   }, [authLoading, user]);
+
+  useEffect(() => {
+    if (!user || !activeGroupId) {
+      setGroupMembers([]);
+      setMembersLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setMembersLoading(true);
+    const loadMembers = async () => {
+      try {
+        const { data, error: membersError } = await getSupabaseClient()
+          .from('group_members')
+          .select('user_id, member_email, joined_at')
+          .eq('group_id', activeGroupId)
+          .order('joined_at', { ascending: true });
+
+        if (membersError) throw membersError;
+        if (!cancelled) setGroupMembers(normalizeMembers(data));
+      } catch (membersError) {
+        if (!cancelled) {
+          setGroupMembers([]);
+          setError(`Could not load group members: ${getErrorMessage(membersError)}`);
+        }
+      } finally {
+        if (!cancelled) setMembersLoading(false);
+      }
+    };
+
+    loadMembers();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGroupId, user]);
 
   useEffect(() => {
     if (!user || !activeGroupId) {
@@ -239,41 +320,17 @@ export default function Home() {
   }, [activeGroupId, user]);
 
   useEffect(() => {
-    if (!activeGroupId) {
-      setPeople(DEFAULT_PEOPLE);
-      setPeopleGroupId('');
-      return;
-    }
-
-    try {
-      const savedPeople = JSON.parse(localStorage.getItem(`${STORAGE_KEYS.peoplePrefix}${activeGroupId}`) || 'null');
-      setPeople(Array.isArray(savedPeople) && savedPeople.length ? savedPeople : DEFAULT_PEOPLE);
-      setPeopleGroupId(activeGroupId);
-    } catch {
-      setPeople(DEFAULT_PEOPLE);
-      setPeopleGroupId(activeGroupId);
-    }
-  }, [activeGroupId]);
-
-  useEffect(() => {
-    if (!activeGroupId || peopleGroupId !== activeGroupId) return;
-    try {
-      localStorage.setItem(`${STORAGE_KEYS.peoplePrefix}${activeGroupId}`, JSON.stringify(people));
-    } catch {}
-  }, [activeGroupId, people, peopleGroupId]);
-
-  useEffect(() => {
     setManualExpense((current) => {
       const validPeople = people.filter((person) => current.splitBetween.includes(person));
       const normalizedSplit = validPeople.length ? validPeople : [...people];
-      const nextPaidBy = people.includes(current.paidBy) ? current.paidBy : people[0] || 'You';
+      const nextPaidBy = people.includes(current.paidBy) ? current.paidBy : currentPerson;
       return {
         ...current,
         paidBy: nextPaidBy,
         splitBetween: normalizedSplit,
       };
     });
-  }, [people]);
+  }, [currentPerson, people]);
 
   const balances = useMemo(() => computeBalances(people, expenses), [people, expenses]);
   const settlement = useMemo(() => settleUp(balances), [balances]);
@@ -291,9 +348,9 @@ export default function Home() {
         group_id: activeGroupId,
         name: expense.name,
         emoji: expense.emoji || '🧾',
-        paid_by: expense.paidBy,
+        paid_by: expense.paidBy || currentPerson,
         amount: expense.amount,
-        split_between: expense.splitBetween,
+        split_between: expense.splitBetween.length ? expense.splitBetween : [currentPerson],
       })
       .select()
       .single();
@@ -303,74 +360,6 @@ export default function Home() {
     const savedExpense = normalizeExpense(data);
     setExpenses((current) => [...current, savedExpense]);
     setError('');
-  };
-
-  const addPerson = () => {
-    const trimmed = newPerson.trim();
-    if (!trimmed) return;
-    if (people.some((person) => person.toLowerCase() === trimmed.toLowerCase())) {
-      setNewPerson('');
-      return;
-    }
-
-    setPeople((current) => [...current, trimmed]);
-    setManualExpense((current) => ({
-      ...current,
-      splitBetween: [...current.splitBetween, trimmed],
-      paidBy: current.paidBy || trimmed,
-    }));
-    setNewPerson('');
-  };
-
-  const removePerson = (person) => {
-    if (people.length <= 1) {
-      setError('At least one person must remain in the group.');
-      return;
-    }
-
-    const remainingPeople = people.filter((item) => item !== person);
-    const replacementPayer = remainingPeople.includes('You') ? 'You' : remainingPeople[0];
-
-    const updatedExpenses = expenses.map((expense) => {
-      const paidBy = expense.paidBy === person ? replacementPayer : expense.paidBy;
-      const splitBetween = (expense.splitBetween || []).filter((item) => item !== person);
-
-      return {
-        ...expense,
-        paidBy,
-        splitBetween: splitBetween.length ? splitBetween : [paidBy],
-      };
-    });
-
-    const changedExpenses = updatedExpenses.filter((expense, index) => (
-      expense.paidBy !== expenses[index].paidBy
-      || expense.splitBetween.join('\0') !== (expenses[index].splitBetween || []).join('\0')
-    ));
-
-    const persistChanges = async () => {
-      try {
-        for (const expense of changedExpenses) {
-          const { error: updateError } = await getSupabaseClient()
-            .from('expenses')
-            .update({
-              paid_by: expense.paidBy,
-              split_between: expense.splitBetween,
-            })
-                .eq('id', expense.id)
-                .eq('group_id', activeGroupId);
-
-          if (updateError) throw updateError;
-        }
-
-        setPeople(remainingPeople);
-        setExpenses(updatedExpenses);
-        setError('');
-      } catch (updateError) {
-        setError(`Could not update expenses for ${person}: ${getErrorMessage(updateError)}`);
-      }
-    };
-
-    persistChanges();
   };
 
   const createGroup = async (event) => {
@@ -396,7 +385,11 @@ export default function Home() {
 
       const { error: membershipError } = await supabase
         .from('group_members')
-        .insert({ group_id: group.id, user_id: currentUser.id });
+        .insert({
+          group_id: group.id,
+          user_id: currentUser.id,
+          member_email: ownerEmail,
+        });
 
       if (membershipError) {
         throw new Error(`Group was created but membership could not be added: ${getErrorMessage(membershipError)}`);
@@ -404,6 +397,7 @@ export default function Home() {
 
       setNewGroupName('');
       await loadGroups(group.id);
+      setShowGroupPicker(false);
     } catch (createError) {
       setError(`Could not create group: ${getErrorMessage(createError)}`);
     } finally {
@@ -427,6 +421,7 @@ export default function Home() {
 
       setJoinCode('');
       await loadGroups(groupId);
+      setShowGroupPicker(false);
     } catch (joinError) {
       setError(`Could not join group: ${getErrorMessage(joinError)}`);
     } finally {
@@ -552,9 +547,9 @@ export default function Home() {
       await insertExpense({
         emoji: '🤖',
         name: parsedExpense.name || 'AI expense',
-        paidBy: people.includes(parsedExpense.paidBy) ? parsedExpense.paidBy : 'You',
+        paidBy: currentPerson,
         amount: Number(parsedExpense.amount || 0),
-        splitBetween: people.length ? [...people] : ['You'],
+        splitBetween: [...people],
       });
 
       setAiText('');
@@ -589,7 +584,18 @@ export default function Home() {
           </div>
           {user && (
             <div style={styles.accountActions}>
-              <div style={styles.groupPill}>{people.length} people</div>
+              {!showGroupPicker && activeGroup && (
+                <>
+                  <div style={styles.groupPill}>{activeGroup.name}</div>
+                  <button
+                    type="button"
+                    style={styles.secondaryBtn}
+                    onClick={() => setShowGroupPicker(true)}
+                  >
+                    Back to groups
+                  </button>
+                </>
+              )}
               <button type="button" style={styles.secondaryBtn} onClick={signOut} disabled={authBusy}>
                 Sign out
               </button>
@@ -620,8 +626,8 @@ export default function Home() {
                   </button>
                 </div>
                 <div style={styles.authNotice}>
-                  No email will be sent. This address is unverified; group membership is tied to the
-                  anonymous browser session, not the email address.
+                  No email will be sent. This address is unverified and is used to restore group
+                  memberships, so anyone entering it can access that email's groups.
                 </div>
               </form>
             )}
@@ -631,28 +637,32 @@ export default function Home() {
         {user && (
           <>
         <div style={styles.identityWarning}>
-          Group access is tied to this anonymous session. Using the same email on another browser does not transfer group membership.
+          Group membership is restored by the entered email. Email addresses are not verified, so anyone entering an address can access its groups.
         </div>
+        {showGroupPicker || !activeGroupId ? (
         <section style={styles.section}>
-          <div style={styles.sectionHeader}>Your groups</div>
+          <div style={styles.sectionHeader}>Choose a group</div>
           {groups.length > 0 && (
-            <>
-              <select
-                style={styles.select}
-                value={activeGroupId}
-                onChange={(event) => selectGroup(event.target.value)}
-                aria-label="Current group"
-              >
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>{group.name}</option>
-                ))}
-              </select>
-              {activeGroupId && (
-                <div style={styles.groupCode}>
-                  Invite code: <strong>{groups.find((group) => group.id === activeGroupId)?.join_code}</strong>
-                </div>
-              )}
-            </>
+            <div style={styles.groupList} aria-label="Groups you belong to">
+              {groups.map((group) => {
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    style={styles.groupOption}
+                    onClick={() => {
+                      selectGroup(group.id);
+                      setShowGroupPicker(false);
+                    }}
+                  >
+                    <span style={styles.groupOptionName}>
+                      {group.name}
+                    </span>
+                    <span style={styles.groupCode}>Invite code: <strong>{group.join_code}</strong></span>
+                  </button>
+                );
+              })}
+            </div>
           )}
           {groupsLoading && <div style={styles.empty}>Loading groups…</div>}
           {!groupsLoading && groups.length === 0 && (
@@ -683,35 +693,20 @@ export default function Home() {
             </form>
           </div>
         </section>
-        {activeGroupId && (
+        ) : (
           <>
         <section style={styles.section}>
-          <div style={styles.peopleRow}>
-            <input
-              style={styles.input}
-              value={newPerson}
-              onChange={(e) => setNewPerson(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addPerson()}
-              placeholder="Add a person"
-              aria-label="Add a person"
-            />
-            <button style={styles.primaryBtn} onClick={addPerson}>Add</button>
-          </div>
+          <div style={styles.sectionHeader}>People in this group</div>
           <div style={styles.peopleList}>
-            {people.map((person) => (
-              <span key={person} style={styles.personChip}>
-                {person}
-                <button
-                  type="button"
-                  style={styles.removePerson}
-                  onClick={() => removePerson(person)}
-                  aria-label={`Remove ${person}`}
-                  title={`Remove ${person}`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
+            {membersLoading
+              ? <span style={styles.empty}>Loading members…</span>
+              : groupMembers.length
+                ? groupMembers.map((member) => (
+                  <span key={member.userId} style={styles.personChip}>
+                    {member.name}{member.userId === user.id ? ' (you)' : ''}
+                  </span>
+                ))
+                : <span style={styles.empty}>No one has joined this group yet.</span>}
           </div>
         </section>
 
@@ -875,7 +870,12 @@ const styles = {
   authFields: { display: 'grid', gap: 10 },
   authNotice: { color: '#64748b', fontSize: 12, lineHeight: 1.5, marginTop: 10 },
   identityWarning: { background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 12, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, marginBottom: 14 },
-  groupCode: { color: '#475569', fontSize: 13, margin: '8px 0' },
+  groupList: { display: 'grid', gap: 8, marginBottom: 10 },
+  groupOption: { display: 'grid', gap: 4, width: '100%', textAlign: 'left', border: '1px solid #dbe2ef', borderRadius: 12, padding: '10px 12px', background: '#fff', color: '#0f172a', cursor: 'pointer' },
+  groupOptionActive: { display: 'grid', gap: 4, width: '100%', textAlign: 'left', border: '1px solid #93c5fd', borderRadius: 12, padding: '10px 12px', background: '#eff6ff', color: '#0f2c7a', cursor: 'pointer' },
+  groupOptionName: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontWeight: 700, fontSize: 14 },
+  currentGroup: { color: '#1d4ed8', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' },
+  groupCode: { color: '#475569', fontSize: 12 },
   groupForms: { display: 'grid', gap: 8, marginTop: 10 },
   groupForm: { display: 'flex', gap: 8 },
   addRow: { display: 'flex', gap: 10 },

@@ -141,35 +141,14 @@ access from a different anonymous session using the same email.
 Run the Hour 6 groups SQL from the course after the expense table is configured. It creates
 `groups`, `group_members`, `join_group(code)`, and adds `group_id` to expenses. This app then
 lets you create and switch groups, share a group's join code, join by code, and view/add/remove
-expenses only in the active group. The people list is saved locally per selected group.
+expenses only in the active group.
 
-The supplied Hour 6 SQL needs these additions for the app's create/update flows. Run them in the
-SQL Editor after the Hour 6 SQL. The creator policy lets the app retrieve its new group before
-adding the creator as a member. The update policy is needed when editing expenses, such as
-removing someone from a split. Remove earlier email/user-only expense policies: PostgreSQL ORs
-permissive policies together, which would otherwise bypass group isolation.
-
-```sql
-drop policy if exists "creators can see their groups" on groups;
-create policy "creators can see their groups"
-  on groups for select to authenticated
-  using (created_by = auth.uid());
-
-drop policy if exists "update group expenses" on expenses;
-create policy "update group expenses"
-  on expenses for update to authenticated
-  using (is_group_member(group_id))
-  with check (is_group_member(group_id));
-
-drop policy if exists "Email users can read expenses" on expenses;
-drop policy if exists "Email users can add expenses" on expenses;
-drop policy if exists "Email users can update expenses" on expenses;
-drop policy if exists "Email users can delete expenses" on expenses;
-drop policy if exists "Users can read their expenses" on expenses;
-drop policy if exists "Users can add their expenses" on expenses;
-drop policy if exists "Users can update their expenses" on expenses;
-drop policy if exists "Users can delete their expenses" on expenses;
-```
+After applying the course SQL, run [`supabase/schema_hour6_identity.sql`](./supabase/schema_hour6_identity.sql)
+in the Supabase SQL Editor. It adds the email label to memberships, backfills existing memberships
+from Supabase auth metadata, creates the membership-recovery RPC and supporting policies, and
+updates historical "You" expense labels where the owner email can be matched. It is safe to run
+again. The app calls `restore_email_group_memberships()` at sign-in, so groups are restored when
+the same email is entered in a new anonymous session or browser.
 
 Existing expenses with `group_id is null` won't appear in a group. After creating a group, copy
 its UUID from the `groups` table and assign only the intended legacy rows in the SQL Editor,
@@ -182,9 +161,12 @@ where group_id is null
   and owner_email = lower('you@example.com');
 ```
 
-Membership belongs to the current Supabase anonymous user ID, not the unverified email label.
-To share a group, the other person signs in on their device and joins with the group's code.
-Typing the same email on another device does not transfer membership.
+The group members list represents people who belong to the group, not who's currently online.
+Names are inferred from the email local part (`jane.doe@example.com` becomes "Jane Doe"), and
+the current member is marked "(you)" and used as the payer for new expenses. Email addresses
+are not verified: anyone entering another person's email can claim their memberships and view
+that person's group data. Use only with this limitation understood; verified authentication is
+needed before treating email as a secure identity.
 
 ---
 
@@ -195,7 +177,7 @@ Typing the same email on another device does not transfer membership.
 | **Framework** | [Next.js](https://nextjs.org) (App Router) + React |
 | **The app** | `app/page.js` — the whole SplitSmart UI (one file to start) |
 | **Styles** | `app/globals.css` + inline styles (deepEntra blue) |
-| **Data** | Expenses are stored in Supabase; the people list remains in this browser's `localStorage` |
+| **Data** | Expenses, groups, and group members are stored in Supabase |
 
 ## Scripts
 ```bash
