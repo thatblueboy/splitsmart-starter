@@ -57,7 +57,52 @@ git push
 
 > 🔒 **Keep your API keys private** — never paste them into a screenshot, a commit, or a shared
 > doc. Secrets go in Vercel's **Environment Variables** (and in `.env.local` locally, which is
-> git-ignored). See `.env.example`.
+> git-ignored).
+
+## Supabase expenses
+
+Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `.env.local` for local
+development and in the Vercel project’s Environment Variables for deployment. The app reads
+and writes expenses in the `public.expenses` table. Enable **Email** as a Supabase Auth provider,
+and add your local and deployed app URLs to Supabase Auth's allowed redirect URLs. The app
+requests an email magic link and returns users to the app's current origin.
+
+For a new database, create the table and per-user access policies:
+
+```sql
+create table public.expenses (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  emoji text not null default '🧾',
+  paid_by text not null,
+  amount numeric not null,
+  split_between text[] not null default '{}'
+);
+
+alter table public.expenses enable row level security;
+
+create policy "Users can read their expenses"
+  on public.expenses for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+create policy "Users can add their expenses"
+  on public.expenses for insert to authenticated
+  with check ((select auth.uid()) = user_id);
+
+create policy "Users can update their expenses"
+  on public.expenses for update to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
+create policy "Users can delete their expenses"
+  on public.expenses for delete to authenticated
+  using ((select auth.uid()) = user_id);
+```
+
+For an existing expenses table, add and backfill `user_id` for existing rows before making it
+`not null`, then enable row-level security and create the policies above. Expenses are only
+queried and modified for the signed-in user's ID.
 
 ---
 
@@ -68,7 +113,7 @@ git push
 | **Framework** | [Next.js](https://nextjs.org) (App Router) + React |
 | **The app** | `app/page.js` — the whole SplitSmart UI (one file to start) |
 | **Styles** | `app/globals.css` + inline styles (deepEntra blue) |
-| **Data** | Saved in your browser (`localStorage`) for now — you'll move it to a real database in Hour 5 |
+| **Data** | Expenses are stored in Supabase; the people list remains in this browser's `localStorage` |
 
 ## Scripts
 ```bash

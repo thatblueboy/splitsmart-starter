@@ -2,14 +2,25 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { computeBalances, settleUp } from '../lib/split';
+import { getSupabaseClient } from '../lib/supabaseClient';
 
 const DEFAULT_PEOPLE = ['Aisha', 'Raj', 'Priya', 'You'];
 const STORAGE_KEYS = {
   people: 'splitsmart.people',
-  expenses: 'splitsmart.expenses',
 };
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+function normalizeExpense(row) {
+  return {
+    id: row.id,
+    emoji: row.emoji || '🧾',
+    name: row.name,
+    paidBy: row.paid_by,
+    amount: Number(row.amount),
+    splitBetween: row.split_between || [],
+  };
+}
 
 function parseExpense(text) {
   const cleaned = String(text || '').trim();
@@ -57,10 +68,13 @@ export default function Home() {
   const [people, setPeople] = useState(DEFAULT_PEOPLE);
   const [newPerson, setNewPerson] = useState('');
   const [aiText, setAiText] = useState('');
-  const [expenses, setExpenses] = useState([
-    { id: 'seed-1', emoji: '🍽️', name: 'Dinner', paidBy: 'Aisha', amount: 1800, splitBetween: ['Aisha', 'Raj', 'Priya', 'You'] },
-    { id: 'seed-2', emoji: '🚕', name: 'Cab', paidBy: 'Raj', amount: 400, splitBetween: ['Raj', 'Aisha'] },
-  ]);
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [email, setEmail] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [expenses, setExpenses] = useState([]);
+  const [expensesLoading, setExpensesLoading] = useState(false);
   const [manualExpense, setManualExpense] = useState({
     description: '',
     amount: '',
@@ -70,32 +84,104 @@ export default function Home() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let supabase;
+    try {
+      supabase = getSupabaseClient();
+    } catch (clientError) {
+      setError(`Could not initialize Supabase: ${clientError instanceof Error ? clientError.message : 'Unknown error'}`);
+      setAuthLoading(false);
+      return undefined;
+    }
+
+    let mounted = true;
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      setUser(session?.user || null);
+      setExpenses([]);
+      setExpensesLoading(Boolean(session?.user));
+      setAuthLoading(false);
+      setError('');
+      setAuthMessage('');
+    });
+
+    supabase.auth.getSession().then(({ data: { session }, error: sessionError }) => {
+      if (!mounted) return;
+      if (sessionError) {
+        setError(`Could not check sign-in status: ${sessionError.message}`);
+      }
+      setUser(session?.user || null);
+      setExpensesLoading(Boolean(session?.user));
+      setAuthLoading(false);
+    }).catch((sessionError) => {
+      if (!mounted) return;
+      setError(`Could not check sign-in status: ${sessionError instanceof Error ? sessionError.message : 'Unknown error'}`);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
     try {
       const savedPeople = JSON.parse(localStorage.getItem(STORAGE_KEYS.people) || 'null');
-      const savedExpenses = JSON.parse(localStorage.getItem(STORAGE_KEYS.expenses) || 'null');
 
       if (Array.isArray(savedPeople) && savedPeople.length > 0) {
         setPeople(savedPeople);
       }
-      if (Array.isArray(savedExpenses) && savedExpenses.length > 0) {
-        setExpenses(savedExpenses);
-      }
     } catch {
       // Ignore corrupted local storage data.
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      setExpenses([]);
+      setExpensesLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const loadExpenses = async () => {
+      try {
+        const { data, error: loadError } = await getSupabaseClient()
+          .from('expenses')
+          .select('*')
+          .eq('user_id', user.id);
+
+        if (loadError) throw loadError;
+        if (!cancelled) setExpenses((data || []).map(normalizeExpense));
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(`Could not load expenses: ${loadError instanceof Error ? loadError.message : 'Unknown error'}`);
+        }
+      } finally {
+        if (!cancelled) setExpensesLoading(false);
+      }
+    };
+
+    loadExpenses();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user]);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.people, JSON.stringify(people));
     } catch {}
   }, [people]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.expenses, JSON.stringify(expenses));
-    } catch {}
-  }, [expenses]);
 
   useEffect(() => {
     setManualExpense((current) => {
@@ -113,6 +199,29 @@ export default function Home() {
   const balances = useMemo(() => computeBalances(people, expenses), [people, expenses]);
   const settlement = useMemo(() => settleUp(balances), [balances]);
   const total = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+
+  const insertExpense = async (expense) => {
+    if (!user) throw new Error('Sign in before adding an expense.');
+
+    const { data, error: insertError } = await getSupabaseClient()
+      .from('expenses')
+      .insert({
+        user_id: user.id,
+        name: expense.name,
+        emoji: expense.emoji || '🧾',
+        paid_by: expense.paidBy,
+        amount: expense.amount,
+        split_between: expense.splitBetween,
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+
+    const savedExpense = normalizeExpense(data);
+    setExpenses((current) => [...current, savedExpense]);
+    setError('');
+  };
 
   const addPerson = () => {
     const trimmed = newPerson.trim();
@@ -140,8 +249,7 @@ export default function Home() {
     const remainingPeople = people.filter((item) => item !== person);
     const replacementPayer = remainingPeople.includes('You') ? 'You' : remainingPeople[0];
 
-    setPeople(remainingPeople);
-    setExpenses((current) => current.map((expense) => {
+    const updatedExpenses = expenses.map((expense) => {
       const paidBy = expense.paidBy === person ? replacementPayer : expense.paidBy;
       const splitBetween = (expense.splitBetween || []).filter((item) => item !== person);
 
@@ -150,8 +258,80 @@ export default function Home() {
         paidBy,
         splitBetween: splitBetween.length ? splitBetween : [paidBy],
       };
-    }));
+    });
+
+    const changedExpenses = updatedExpenses.filter((expense, index) => (
+      expense.paidBy !== expenses[index].paidBy
+      || expense.splitBetween.join('\0') !== (expenses[index].splitBetween || []).join('\0')
+    ));
+
+    const persistChanges = async () => {
+      try {
+        for (const expense of changedExpenses) {
+          const { error: updateError } = await getSupabaseClient()
+            .from('expenses')
+            .update({
+              paid_by: expense.paidBy,
+              split_between: expense.splitBetween,
+            })
+                .eq('id', expense.id)
+                .eq('user_id', user.id);
+
+          if (updateError) throw updateError;
+        }
+
+        setPeople(remainingPeople);
+        setExpenses(updatedExpenses);
+        setError('');
+      } catch (updateError) {
+        setError(`Could not update expenses for ${person}: ${updateError instanceof Error ? updateError.message : 'Unknown error'}`);
+      }
+    };
+
+    persistChanges();
+  };
+
+  const sendMagicLink = async (event) => {
+    event.preventDefault();
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
+      setError('Enter your email address to receive a sign-in link.');
+      return;
+    }
+
+    setAuthBusy(true);
     setError('');
+    setAuthMessage('');
+
+    try {
+      const { error: signInError } = await getSupabaseClient().auth.signInWithOtp({
+        email: normalizedEmail,
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      });
+
+      if (signInError) throw signInError;
+      setAuthMessage(`Check ${normalizedEmail} for your sign-in link.`);
+    } catch (signInError) {
+      setError(`Could not send sign-in link: ${signInError instanceof Error ? signInError.message : 'Unknown error'}`);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    setAuthBusy(true);
+    setError('');
+
+    try {
+      const { error: signOutError } = await getSupabaseClient().auth.signOut();
+      if (signOutError) throw signOutError;
+    } catch (signOutError) {
+      setError(`Could not sign out: ${signOutError instanceof Error ? signOutError.message : 'Unknown error'}`);
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   const toggleSplitPerson = (person) => {
@@ -167,7 +347,7 @@ export default function Home() {
     });
   };
 
-  const addManualExpense = () => {
+  const addManualExpense = async () => {
     const description = manualExpense.description.trim();
     const amount = Number(manualExpense.amount);
     const splitBetween = manualExpense.splitBetween.length ? manualExpense.splitBetween : [manualExpense.paidBy];
@@ -177,25 +357,24 @@ export default function Home() {
       return;
     }
 
-    setExpenses((current) => [
-      ...current,
-      {
-        id: 'expense-' + Date.now(),
+    try {
+      await insertExpense({
         emoji: '🧾',
         name: description,
         paidBy: manualExpense.paidBy,
         amount,
         splitBetween,
-      },
-    ]);
+      });
 
-    setManualExpense({
-      description: '',
-      amount: '',
-      paidBy: manualExpense.paidBy,
-      splitBetween: [manualExpense.paidBy],
-    });
-    setError('');
+      setManualExpense({
+        description: '',
+        amount: '',
+        paidBy: manualExpense.paidBy,
+        splitBetween: [manualExpense.paidBy],
+      });
+    } catch (insertError) {
+      setError(`Could not save expense: ${insertError instanceof Error ? insertError.message : 'Unknown error'}`);
+    }
   };
 
   const addParsedExpense = async () => {
@@ -223,27 +402,34 @@ export default function Home() {
         return;
       }
 
-      setExpenses((current) => [
-        ...current,
-        {
-          id: 'ai-' + Date.now(),
-          emoji: '🤖',
-          name: parsedExpense.name || 'AI expense',
-          paidBy: people.includes(parsedExpense.paidBy) ? parsedExpense.paidBy : 'You',
-          amount: Number(parsedExpense.amount || 0),
-          splitBetween: people.length ? [...people] : ['You'],
-        },
-      ]);
+      await insertExpense({
+        emoji: '🤖',
+        name: parsedExpense.name || 'AI expense',
+        paidBy: people.includes(parsedExpense.paidBy) ? parsedExpense.paidBy : 'You',
+        amount: Number(parsedExpense.amount || 0),
+        splitBetween: people.length ? [...people] : ['You'],
+      });
 
       setAiText('');
-      setError('');
     } catch (err) {
       setError(`CLIENT_ERROR: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 
-  const removeExpense = (id) => {
-    setExpenses((current) => current.filter((expense) => expense.id !== id));
+  const removeExpense = async (id) => {
+    try {
+      const { error: deleteError } = await getSupabaseClient()
+        .from('expenses')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', user.id);
+
+      if (deleteError) throw deleteError;
+      setExpenses((current) => current.filter((expense) => expense.id !== id));
+      setError('');
+    } catch (deleteError) {
+      setError(`Could not delete expense: ${deleteError instanceof Error ? deleteError.message : 'Unknown error'}`);
+    }
   };
 
   return (
@@ -254,9 +440,46 @@ export default function Home() {
             <div style={styles.logo}>S</div>
             <div style={styles.title}>Aditya’s SplitSmart</div>
           </div>
-          <div style={styles.groupPill}>{people.length} people</div>
+          {user && (
+            <div style={styles.accountActions}>
+              <div style={styles.groupPill}>{people.length} people</div>
+              <button type="button" style={styles.secondaryBtn} onClick={signOut} disabled={authBusy}>
+                Sign out
+              </button>
+            </div>
+          )}
         </div>
 
+        {!user && (
+          <section style={styles.section}>
+            {authLoading ? (
+              <div style={styles.empty}>Checking sign-in status…</div>
+            ) : (
+              <form onSubmit={sendMagicLink}>
+                <div style={styles.sectionHeader}>Sign in or create an account</div>
+                <div style={styles.peopleRow}>
+                  <input
+                    style={styles.input}
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="Email address"
+                    aria-label="Email address"
+                    required
+                  />
+                  <button type="submit" style={styles.primaryBtn} disabled={authBusy}>
+                    {authBusy ? 'Sending…' : 'Send link'}
+                  </button>
+                </div>
+                {authMessage && <div style={styles.successBox}>{authMessage}</div>}
+              </form>
+            )}
+          </section>
+        )}
+
+        {user && (
+          <>
         <section style={styles.section}>
           <div style={styles.peopleRow}>
             <input
@@ -351,7 +574,9 @@ export default function Home() {
 
         <section style={styles.section}>
           <div style={styles.list}>
-            {expenses.length === 0 ? (
+            {expensesLoading ? (
+              <div style={styles.empty}>Loading expenses…</div>
+            ) : expenses.length === 0 ? (
               <div style={styles.empty}>No expenses yet.</div>
             ) : (
               expenses.map((expense) => (
@@ -401,6 +626,9 @@ export default function Home() {
         </section>
 
         <div style={styles.total}>Total {inr(total)}</div>
+          </>
+        )}
+        {error && <div style={styles.errorBox}>{error}</div>}
       </div>
     </main>
   );
@@ -434,6 +662,8 @@ const styles = {
   groupPill: {
     fontSize: 12, fontWeight: 700, color: '#1d4ed8', background: '#dbeafe', padding: '6px 10px', borderRadius: 999,
   },
+  accountActions: { display: 'flex', alignItems: 'center', gap: 8 },
+  secondaryBtn: { border: '1px solid #dbe2ef', borderRadius: 10, padding: '6px 10px', background: '#fff', color: '#334155', fontWeight: 700, cursor: 'pointer' },
   section: { marginBottom: 18 },
   sectionHeader: { fontSize: 13, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.08, color: '#475569', marginBottom: 8 },
   peopleRow: { display: 'flex', gap: 10, marginBottom: 10 },
@@ -462,6 +692,7 @@ const styles = {
   checkList: { display: 'flex', flexWrap: 'wrap', gap: 8 },
   checkItem: { display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #dbe2ef', borderRadius: 999, padding: '6px 10px', fontSize: 12 },
   errorBox: { background: '#fff1f1', border: '1px solid #f7c7c7', color: '#8a1f1f', borderRadius: 12, padding: '10px 12px', fontSize: 12.5, marginBottom: 14 },
+  successBox: { background: '#ecfdf5', border: '1px solid #bbf7d0', color: '#14532d', borderRadius: 12, padding: '10px 12px', fontSize: 13, marginTop: 10 },
   list: { display: 'flex', flexDirection: 'column', gap: 10 },
   empty: { color: '#64748b', textAlign: 'center', padding: '20px 0', fontSize: 14 },
   item: {
