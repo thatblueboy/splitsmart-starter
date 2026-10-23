@@ -127,6 +127,7 @@ export default function Home() {
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [activeGroupId, setActiveGroupId] = useState('');
   const [showGroupPicker, setShowGroupPicker] = useState(true);
+  const [activeTab, setActiveTab] = useState('overview');
   const [newGroupName, setNewGroupName] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [manualExpense, setManualExpense] = useState({
@@ -415,6 +416,7 @@ export default function Home() {
 
       setNewGroupName('');
       await loadGroups(group.id);
+      setActiveTab('overview');
       setShowGroupPicker(false);
     } catch (createError) {
       setError(`Could not create group: ${getErrorMessage(createError)}`);
@@ -439,6 +441,7 @@ export default function Home() {
 
       setJoinCode('');
       await loadGroups(groupId);
+      setActiveTab('overview');
       setShowGroupPicker(false);
     } catch (joinError) {
       setError(`Could not join group: ${getErrorMessage(joinError)}`);
@@ -593,9 +596,9 @@ export default function Home() {
   };
 
   return (
-    <main style={styles.page}>
-      <div style={styles.card}>
-        <div style={styles.header}>
+    <main className="app-page" style={styles.page}>
+      <div className="app-card" style={styles.card}>
+        <div className="app-header" style={styles.header}>
           <div style={styles.brand}>
             <div style={styles.logo}>S</div>
             <div style={styles.title}>Aditya’s SplitSmart</div>
@@ -667,6 +670,7 @@ export default function Home() {
                     style={styles.groupOption}
                     onClick={() => {
                       selectGroup(group.id);
+                      setActiveTab('overview');
                       setShowGroupPicker(false);
                     }}
                   >
@@ -710,102 +714,231 @@ export default function Home() {
         </section>
         ) : (
           <>
-        <section style={styles.section}>
-          <div style={styles.sectionHeader}>People in this group</div>
-          <div style={styles.peopleList}>
-            {membersLoading
-              ? <span style={styles.empty}>Loading members…</span>
-              : groupMembers.length
-                ? groupMembers.map((member) => (
-                  <span key={member.userId} style={styles.personChip}>
-                    {member.name}{member.userId === user.id ? ' (you)' : ''}
-                  </span>
-                ))
-                : <span style={styles.empty}>No one has joined this group yet.</span>}
-          </div>
-        </section>
-
-        <section style={{ ...styles.section, ...styles.entryMethod }}>
-          <div style={styles.entryMethodTitle}>Add with natural language</div>
-          <div style={styles.entryMethodDescription}>
-            Describe the expense in a sentence, for example “Dinner for 1800 split 4 ways.”
-          </div>
-          <div style={styles.addRow}>
-            <input
-              style={styles.input}
-              value={aiText}
-              onChange={(e) => setAiText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addParsedExpense()}
-              placeholder="Dinner for 1800 split 4 ways"
-            />
-            <button style={styles.primaryBtn} onClick={addParsedExpense}>Create</button>
-          </div>
-        </section>
-
-        <div style={styles.methodDivider} aria-hidden="true">
-          <span style={styles.methodDividerLine} />
-          <strong>OR ENTER DETAILS</strong>
-          <span style={styles.methodDividerLine} />
-        </div>
-
-        <section style={{ ...styles.section, ...styles.entryMethod }}>
-          <div style={styles.entryMethodTitle}>Add manually</div>
-          <div style={styles.entryMethodDescription}>
-            Enter the expense name, amount, payer, and who will split it.
-          </div>
-          <div style={styles.formGrid}>
-            <input
-              style={styles.input}
-              value={manualExpense.description}
-              onChange={(e) => setManualExpense((current) => ({ ...current, description: e.target.value }))}
-              placeholder="Expense name"
-            />
-            <input
-              style={styles.input}
-              type="number"
-              min="0"
-              step="0.01"
-              value={manualExpense.amount}
-              onChange={(e) => setManualExpense((current) => ({ ...current, amount: e.target.value }))}
-              placeholder="Amount"
-            />
-            <select
-              style={styles.select}
-              value={manualExpense.paidBy}
-              onChange={(e) => setManualExpense((current) => ({ ...current, paidBy: e.target.value }))}
+        <nav className="dashboard-tabs" aria-label="Group dashboard">
+          {[
+            { id: 'overview', label: 'Overview', icon: '⌂' },
+            { id: 'expenses', label: 'Expenses', icon: '▤' },
+            { id: 'add', label: 'Add', icon: '+' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`dashboard-tab${activeTab === tab.id ? ' dashboard-tab-active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
             >
-              {people.map((person) => (
-                <option key={person} value={person}>{person}</option>
-              ))}
-            </select>
-          </div>
+              <span className="dashboard-tab-icon" aria-hidden="true">{tab.icon}</span>
+              <span>{tab.label}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            className="dashboard-tab"
+            onClick={() => setShowGroupPicker(true)}
+          >
+            <span className="dashboard-tab-icon" aria-hidden="true">☷</span>
+            <span>Groups</span>
+          </button>
+        </nav>
 
-          <div style={styles.splitBox}>
-            <div style={styles.splitLabel}>Split between</div>
-            <div style={styles.checkList}>
-              {people.map((person) => (
-                <label key={person} style={styles.checkItem}>
-                  <input
-                    type="checkbox"
-                    checked={manualExpense.splitBetween.includes(person)}
-                    onChange={() => toggleSplitPerson(person)}
-                  />
-                  <span>{person}</span>
-                </label>
-              ))}
+        {activeTab === 'overview' && (
+          <div className="dashboard-overview">
+            <section className="dashboard-summary" style={styles.section}>
+              <div style={styles.dashboardHeading}>
+                <div>
+                  <div style={styles.dashboardEyebrow}>GROUP OVERVIEW</div>
+                  <h1 style={styles.dashboardTitle}>{activeGroup?.name || 'Your group'}</h1>
+                </div>
+                <button
+                  type="button"
+                  style={styles.dashboardAddButton}
+                  onClick={() => setActiveTab('add')}
+                  aria-label="Add an expense"
+                >
+                  + Add
+                </button>
+              </div>
+              <div style={styles.summaryGrid}>
+                <div style={styles.summaryCard}>
+                  <span style={styles.summaryLabel}>Group spending</span>
+                  <strong style={styles.summaryValue}>{inr(total)}</strong>
+                </div>
+                <div style={styles.summaryCard}>
+                  <span style={styles.summaryLabel}>Expenses</span>
+                  <strong style={styles.summaryValue}>{expenses.length}</strong>
+                </div>
+              </div>
+            </section>
+
+            <section className="dashboard-members" style={styles.section}>
+              <div style={styles.sectionHeader}>People in this group</div>
+              <div style={styles.peopleList}>
+                {membersLoading
+                  ? <span style={styles.empty}>Loading members…</span>
+                  : groupMembers.length
+                    ? groupMembers.map((member) => (
+                      <span key={member.userId} style={styles.personChip}>
+                        {member.name}{member.userId === user.id ? ' (you)' : ''}
+                      </span>
+                    ))
+                    : <span style={styles.empty}>No one has joined this group yet.</span>}
+              </div>
+            </section>
+
+            <section className="dashboard-balances" style={styles.section}>
+              <div style={styles.sectionHeader}>Balances</div>
+              <div style={styles.balanceList}>
+                {people.map((person) => {
+                  const amount = balances[person] || 0;
+                  return (
+                    <div key={person} style={styles.balanceRow}>
+                      <span>{person}</span>
+                      <strong style={{ color: amount >= 0 ? '#0a7a44' : '#9b2c2c' }}>
+                        {amount >= 0 ? '+' : '-'}{inr(Math.abs(amount))}
+                      </strong>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="dashboard-settlement" style={styles.section}>
+              <div style={styles.sectionHeader}>Settle up</div>
+              <div style={styles.settleList}>
+                {settlement.length === 0 ? (
+                  <div style={styles.empty}>Everyone is settled.</div>
+                ) : (
+                  settlement.map((item, index) => (
+                    <div key={`${item.from}-${item.to}-${index}`} style={styles.settleRow}>
+                      <span>{item.from} pays {item.to}</span>
+                      <strong>{inr(item.amount)}</strong>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className="dashboard-recent" style={styles.section}>
+              <div style={styles.dashboardListHeading}>
+                <div style={styles.sectionHeader}>Recent expenses</div>
+                <button type="button" style={styles.textButton} onClick={() => setActiveTab('expenses')}>
+                  See all
+                </button>
+              </div>
+              <div style={styles.list}>
+                {!expensesLoading && expenses.length === 0 ? (
+                  <div style={styles.empty}>No expenses yet.</div>
+                ) : !expensesLoading && expenses.slice(0, 3).map((expense) => (
+                  <div key={expense.id} style={styles.item}>
+                    <div style={styles.itemEmoji}>{expense.emoji || '🧾'}</div>
+                    <div style={styles.itemMain}>
+                      <div style={styles.itemName}>{expense.name}</div>
+                      <div style={styles.itemMeta}>paid by {expense.paidBy}</div>
+                    </div>
+                    <div style={styles.itemAmount}>{inr(expense.amount)}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {activeTab === 'add' && (
+          <>
+            <section style={styles.section}>
+              <div style={styles.dashboardEyebrow}>NEW TRANSACTION</div>
+              <h1 style={styles.dashboardTitle}>Add an expense</h1>
+            </section>
+            <section style={{ ...styles.section, ...styles.entryMethod }}>
+              <div style={styles.entryMethodTitle}>Add with natural language</div>
+              <div style={styles.entryMethodDescription}>
+                Describe the expense in a sentence, for example “Dinner for 1800 split 4 ways.”
+              </div>
+              <div style={styles.addRow}>
+                <input
+                  style={styles.input}
+                  value={aiText}
+                  onChange={(e) => setAiText(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addParsedExpense()}
+                  placeholder="Dinner for 1800 split 4 ways"
+                />
+                <button style={styles.primaryBtn} onClick={addParsedExpense}>Create</button>
+              </div>
+            </section>
+
+            <div style={styles.methodDivider} aria-hidden="true">
+              <span style={styles.methodDividerLine} />
+              <strong>OR ENTER DETAILS</strong>
+              <span style={styles.methodDividerLine} />
             </div>
-          </div>
 
-          <button style={styles.primaryBtnWide} onClick={addManualExpense}>Save expense</button>
-        </section>
+            <section style={{ ...styles.section, ...styles.entryMethod }}>
+              <div style={styles.entryMethodTitle}>Add manually</div>
+              <div style={styles.entryMethodDescription}>
+                Enter the expense name, amount, payer, and who will split it.
+              </div>
+              <div style={styles.formGrid}>
+                <input
+                  style={styles.input}
+                  value={manualExpense.description}
+                  onChange={(e) => setManualExpense((current) => ({ ...current, description: e.target.value }))}
+                  placeholder="Expense name"
+                />
+                <input
+                  style={styles.input}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={manualExpense.amount}
+                  onChange={(e) => setManualExpense((current) => ({ ...current, amount: e.target.value }))}
+                  placeholder="Amount"
+                />
+                <select
+                  style={styles.select}
+                  value={manualExpense.paidBy}
+                  onChange={(e) => setManualExpense((current) => ({ ...current, paidBy: e.target.value }))}
+                >
+                  {people.map((person) => (
+                    <option key={person} value={person}>{person}</option>
+                  ))}
+                </select>
+              </div>
 
-        <section style={styles.section}>
-          <div style={styles.sectionHeader}>Expenses</div>
-          <div style={styles.list}>
-            {!expensesLoading && expenses.length === 0 ? (
-              <div style={styles.empty}>No expenses yet.</div>
-            ) : !expensesLoading && (
-              expenses.map((expense) => (
+              <div style={styles.splitBox}>
+                <div style={styles.splitLabel}>Split between</div>
+                <div style={styles.checkList}>
+                  {people.map((person) => (
+                    <label key={person} style={styles.checkItem}>
+                      <input
+                        type="checkbox"
+                        checked={manualExpense.splitBetween.includes(person)}
+                        onChange={() => toggleSplitPerson(person)}
+                      />
+                      <span>{person}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <button style={styles.primaryBtnWide} onClick={addManualExpense}>Save expense</button>
+            </section>
+          </>
+        )}
+
+        {activeTab === 'expenses' && (
+          <section style={styles.section}>
+            <div style={styles.dashboardListHeading}>
+              <div>
+                <div style={styles.dashboardEyebrow}>GROUP ACTIVITY</div>
+                <h1 style={styles.dashboardTitle}>Expenses</h1>
+              </div>
+              <button type="button" style={styles.dashboardAddButton} onClick={() => setActiveTab('add')}>
+                + Add
+              </button>
+            </div>
+            <div style={styles.list}>
+              {!expensesLoading && expenses.length === 0 ? (
+                <div style={styles.empty}>No expenses yet.</div>
+              ) : !expensesLoading && expenses.map((expense) => (
                 <div key={expense.id} style={styles.item}>
                   <div style={styles.itemEmoji}>{expense.emoji || '🧾'}</div>
                   <div style={styles.itemMain}>
@@ -822,43 +955,10 @@ export default function Home() {
                     ×
                   </button>
                 </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section style={styles.section}>
-          <div style={styles.balanceList}>
-            {people.map((person) => {
-              const amount = balances[person] || 0;
-              return (
-                <div key={person} style={styles.balanceRow}>
-                  <span>{person}</span>
-                  <strong style={{ color: amount >= 0 ? '#0a7a44' : '#9b2c2c' }}>
-                    {amount >= 0 ? '+' : '-'}{inr(Math.abs(amount))}
-                  </strong>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section style={styles.section}>
-          <div style={styles.settleList}>
-            {settlement.length === 0 ? (
-              <div style={styles.empty}>Everyone is settled.</div>
-            ) : (
-              settlement.map((item, index) => (
-                <div key={`${item.from}-${item.to}-${index}`} style={styles.settleRow}>
-                  <span>{item.from} pays {item.to}</span>
-                  <strong>{inr(item.amount)}</strong>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <div style={styles.total}>Total {inr(total)}</div>
+              ))}
+            </div>
+          </section>
+        )}
           </>
         )}
           </>
@@ -875,7 +975,7 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '24px 16px 40px',
+    padding: '24px 16px 112px',
     background: 'linear-gradient(180deg, #f2f6ff 0%, #eef2f8 100%)',
   },
   card: {
@@ -902,6 +1002,16 @@ const styles = {
   section: { marginBottom: 18 },
   sectionHeader: { fontSize: 13, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.08, color: '#475569', marginBottom: 8 },
   peopleRow: { display: 'flex', gap: 10, marginBottom: 10 },
+  dashboardHeading: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 },
+  dashboardEyebrow: { color: '#64748b', fontSize: 10, fontWeight: 800, letterSpacing: 1.1, marginBottom: 4 },
+  dashboardTitle: { margin: 0, color: '#0d1b3e', fontSize: 24, lineHeight: 1.2, fontWeight: 800 },
+  dashboardAddButton: { border: 'none', borderRadius: 12, padding: '10px 14px', background: '#0f2c7a', color: '#fff', fontWeight: 700, whiteSpace: 'nowrap' },
+  summaryGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 },
+  summaryCard: { display: 'grid', gap: 8, minWidth: 0, border: '1px solid #dbeafe', borderRadius: 16, padding: 14, background: 'linear-gradient(135deg, #eff6ff, #fff)' },
+  summaryLabel: { color: '#64748b', fontSize: 12, fontWeight: 600 },
+  summaryValue: { color: '#0f2c7a', fontSize: 21, overflowWrap: 'anywhere' },
+  dashboardListHeading: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 },
+  textButton: { border: 'none', background: 'transparent', color: '#1d4ed8', fontSize: 13, fontWeight: 700, padding: 6 },
   entryMethod: { border: '1px solid #dbe2ef', borderRadius: 16, padding: 14, background: '#f8fafc' },
   entryMethodTitle: { color: '#0f172a', fontSize: 15, fontWeight: 800, marginBottom: 4 },
   entryMethodDescription: { color: '#64748b', fontSize: 12, lineHeight: 1.5, marginBottom: 12 },

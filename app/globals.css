@@ -21,3 +21,154 @@ html, body {
 
 button { font-family: inherit; cursor: pointer; }
 input { font-family: inherit; }
+
+.dashboard-tabs {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: 100%;
+  margin: 0 0 28px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 5px 16px rgba(15, 23, 42, 0.05);
+}
+
+.dashboard-tab {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 0;
+  border-radius: 12px;
+  padding: 5px 2px;
+  background: transparent;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.dashboard-tab-active {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.dashboard-tab-icon {
+  font-size: 19px;
+  line-height: 1;
+}
+
+.dashboard-overview {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 24px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.dashboard-overview > section {
+  min-width: 0;
+  margin-bottom: 24px !important;
+}
+
+.dashboard-summary,
+.dashboard-recent {
+  grid-column: 1 / -1;
+}
+
+.dashboard-members {
+  grid-column: span 4;
+}
+
+.dashboard-balances {
+  grid-column: span 8;
+}
+
+.dashboard-settlement {
+  grid-column: span 6;
+}
+
+.app-page {
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  padding: 24px 32px 32px !important;
+}
+
+.app-card {
+  width: 100% !important;
+  max-width: none !important;
+  min-height: calc(100vh - 56px);
+  padding: clamp(24px, 3vw, 48px) !important;
+  border-radius: 24px !important;
+}
+
+.app-header {
+  margin-bottom: 28px !important;
+}
+
+.dashboard-tab {
+  flex-direction: row;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 13px;
+}
+
+.app-card > .section,
+.app-card > .entryMethod {
+  max-width: 1100px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+@media (max-width: 600px) {
+  .app-page {
+    align-items: flex-start !important;
+    padding: 12px 12px 104px !important;
+  }
+
+  .app-card {
+    border-radius: 20px !important;
+    padding: 16px !important;
+  }
+
+  .app-header {
+    align-items: flex-start !important;
+    gap: 10px;
+  }
+
+  .app-header > div:last-child {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .dashboard-tabs {
+    position: fixed;
+    z-index: 20;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    margin: 0 auto;
+    padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+    border-right: 0;
+    border-left: 0;
+    border-bottom: 0;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 28px rgba(15, 23, 42, 0.1);
+  }
+
+  .dashboard-tab {
+    flex-direction: column;
+  }
+
+  .dashboard-overview {
+    display: block;
+  }
+
+  .dashboard-overview > section {
+    margin-bottom: 18px !important;
+  }
+}
