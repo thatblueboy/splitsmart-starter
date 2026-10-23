@@ -131,6 +131,29 @@ export default function Home() {
     setNewPerson('');
   };
 
+  const removePerson = (person) => {
+    if (people.length <= 1) {
+      setError('At least one person must remain in the group.');
+      return;
+    }
+
+    const remainingPeople = people.filter((item) => item !== person);
+    const replacementPayer = remainingPeople.includes('You') ? 'You' : remainingPeople[0];
+
+    setPeople(remainingPeople);
+    setExpenses((current) => current.map((expense) => {
+      const paidBy = expense.paidBy === person ? replacementPayer : expense.paidBy;
+      const splitBetween = (expense.splitBetween || []).filter((item) => item !== person);
+
+      return {
+        ...expense,
+        paidBy,
+        splitBetween: splitBetween.length ? splitBetween : [paidBy],
+      };
+    }));
+    setError('');
+  };
+
   const toggleSplitPerson = (person) => {
     setManualExpense((current) => {
       const exists = current.splitBetween.includes(person);
@@ -248,7 +271,18 @@ export default function Home() {
           </div>
           <div style={styles.peopleList}>
             {people.map((person) => (
-              <span key={person} style={styles.personChip}>{person}</span>
+              <span key={person} style={styles.personChip}>
+                {person}
+                <button
+                  type="button"
+                  style={styles.removePerson}
+                  onClick={() => removePerson(person)}
+                  aria-label={`Remove ${person}`}
+                  title={`Remove ${person}`}
+                >
+                  ×
+                </button>
+              </span>
             ))}
           </div>
         </section>
@@ -420,8 +454,9 @@ const styles = {
   },
   peopleList: { display: 'flex', flexWrap: 'wrap', gap: 8 },
   personChip: {
-    background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 999, padding: '6px 10px', fontSize: 12, fontWeight: 700,
+    display: 'inline-flex', alignItems: 'center', gap: 4, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 999, padding: '4px 6px 4px 10px', fontSize: 12, fontWeight: 700,
   },
+  removePerson: { border: 'none', background: 'transparent', color: '#64748b', fontSize: 16, lineHeight: 1, width: 18, height: 18, padding: 0, borderRadius: 999, cursor: 'pointer' },
   splitBox: { marginTop: 12, border: '1px solid #e2e8f0', borderRadius: 14, padding: 12, background: '#f8fafc' },
   splitLabel: { fontWeight: 700, marginBottom: 10, fontSize: 13 },
   checkList: { display: 'flex', flexWrap: 'wrap', gap: 8 },
