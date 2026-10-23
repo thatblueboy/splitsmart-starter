@@ -86,9 +86,6 @@ export default function Home() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [authMode, setAuthMode] = useState('signin');
-  const [authMessage, setAuthMessage] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [expenses, setExpenses] = useState([]);
   const [expensesLoading, setExpensesLoading] = useState(false);
@@ -99,6 +96,9 @@ export default function Home() {
     splitBetween: ['You'],
   });
   const [error, setError] = useState('');
+  const ownerEmail = typeof user?.user_metadata?.unverified_email === 'string'
+    ? user.user_metadata.unverified_email.trim().toLowerCase()
+    : '';
 
   useEffect(() => {
     let supabase;
@@ -119,7 +119,6 @@ export default function Home() {
       setExpensesLoading(Boolean(session?.user));
       setAuthLoading(false);
       setError('');
-      setAuthMessage('');
     });
 
     supabase.auth.getSession().then(({ data: { session }, error: sessionError }) => {
@@ -162,7 +161,7 @@ export default function Home() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
+    if (!user || !ownerEmail) {
       setExpenses([]);
       setExpensesLoading(false);
       return;
@@ -174,7 +173,7 @@ export default function Home() {
         const { data, error: loadError } = await getSupabaseClient()
           .from('expenses')
           .select('*')
-          .eq('user_id', user.id);
+          .eq('owner_email', ownerEmail);
 
         if (loadError) throw loadError;
         if (!cancelled) setExpenses((data || []).map(normalizeExpense));
@@ -192,7 +191,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user]);
+  }, [authLoading, ownerEmail, user]);
 
   useEffect(() => {
     try {
@@ -218,12 +217,13 @@ export default function Home() {
   const total = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
 
   const insertExpense = async (expense) => {
-    if (!user) throw new Error('Sign in before adding an expense.');
+    if (!user || !ownerEmail) throw new Error('Enter your email before adding an expense.');
 
     const { data, error: insertError } = await getSupabaseClient()
       .from('expenses')
       .insert({
         user_id: user.id,
+        owner_email: ownerEmail,
         name: expense.name,
         emoji: expense.emoji || '🧾',
         paid_by: expense.paidBy,
@@ -292,7 +292,7 @@ export default function Home() {
               split_between: expense.splitBetween,
             })
                 .eq('id', expense.id)
-                .eq('user_id', user.id);
+                .eq('owner_email', ownerEmail);
 
           if (updateError) throw updateError;
         }
@@ -308,36 +308,23 @@ export default function Home() {
     persistChanges();
   };
 
-  const submitAuth = async (event) => {
+  const continueWithEmail = async (event) => {
     event.preventDefault();
     const normalizedEmail = email.trim();
 
     setAuthBusy(true);
     setError('');
-    setAuthMessage('');
 
     try {
-      const auth = getSupabaseClient().auth;
-      if (authMode === 'signup') {
-        const { data, error: signUpError } = await auth.signUp({
-          email: normalizedEmail,
-          password,
-        });
+      const { error: signInError } = await getSupabaseClient().auth.signInAnonymously({
+        options: {
+          data: { unverified_email: normalizedEmail },
+        },
+      });
 
-        if (signUpError) throw signUpError;
-        if (!data.session) {
-          setAuthMessage('Account created, but email confirmation is enabled in Supabase. Disable it to sign in without a verification email.');
-        }
-      } else {
-        const { error: signInError } = await auth.signInWithPassword({
-          email: normalizedEmail,
-          password,
-        });
-
-        if (signInError) throw signInError;
-      }
+      if (signInError) throw signInError;
     } catch (authError) {
-      setError(`Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${getErrorMessage(authError)}`);
+      setError(`Could not continue: ${getErrorMessage(authError)}`);
     } finally {
       setAuthBusy(false);
     }
@@ -445,7 +432,7 @@ export default function Home() {
         .from('expenses')
         .delete()
         .eq('id', id)
-        .eq('user_id', user.id);
+        .eq('owner_email', ownerEmail);
 
       if (deleteError) throw deleteError;
       setExpenses((current) => current.filter((expense) => expense.id !== id));
@@ -478,10 +465,8 @@ export default function Home() {
             {authLoading ? (
               <div style={styles.empty}>Checking sign-in status…</div>
             ) : (
-              <form onSubmit={submitAuth}>
-                <div style={styles.sectionHeader}>
-                  {authMode === 'signup' ? 'Create an account' : 'Sign in'}
-                </div>
+              <form onSubmit={continueWithEmail}>
+                <div style={styles.sectionHeader}>Continue with email</div>
                 <div style={styles.authFields}>
                   <input
                     style={styles.input}
@@ -493,33 +478,14 @@ export default function Home() {
                     aria-label="Email address"
                     required
                   />
-                  <input
-                    style={styles.input}
-                    type="password"
-                    autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    placeholder="Password"
-                    aria-label="Password"
-                    minLength={8}
-                    required
-                  />
                   <button type="submit" style={styles.primaryBtnWide} disabled={authBusy}>
-                    {authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : 'Sign in'}
+                    {authBusy ? 'Please wait…' : 'Continue'}
                   </button>
                 </div>
-                {authMessage && <div style={styles.successBox}>{authMessage}</div>}
-                <button
-                  type="button"
-                  style={styles.authToggle}
-                  onClick={() => {
-                    setAuthMode((current) => current === 'signup' ? 'signin' : 'signup');
-                    setAuthMessage('');
-                    setError('');
-                  }}
-                >
-                  {authMode === 'signup' ? 'Already have an account? Sign in' : 'New here? Create an account'}
-                </button>
+                <div style={styles.authNotice}>
+                  No email will be sent. Anyone who enters the same unverified address can view and change
+                  expenses saved under it.
+                </div>
               </form>
             )}
           </section>
@@ -527,6 +493,9 @@ export default function Home() {
 
         {user && (
           <>
+        <div style={styles.identityWarning}>
+          Expenses for <strong>{ownerEmail || 'this session'}</strong> are shared by entered email. Email ownership is not verified.
+        </div>
         <section style={styles.section}>
           <div style={styles.peopleRow}>
             <input
@@ -715,7 +684,8 @@ const styles = {
   sectionHeader: { fontSize: 13, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.08, color: '#475569', marginBottom: 8 },
   peopleRow: { display: 'flex', gap: 10, marginBottom: 10 },
   authFields: { display: 'grid', gap: 10 },
-  authToggle: { border: 'none', background: 'transparent', color: '#1d4ed8', padding: '10px 0 0', fontSize: 13, cursor: 'pointer' },
+  authNotice: { color: '#64748b', fontSize: 12, lineHeight: 1.5, marginTop: 10 },
+  identityWarning: { background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 12, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, marginBottom: 14 },
   addRow: { display: 'flex', gap: 10 },
   formGrid: { display: 'grid', gap: 10 },
   input: {

@@ -63,17 +63,20 @@ git push
 
 Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `.env.local` for local
 development and in the Vercel project’s Environment Variables for deployment. The app reads
-and writes expenses in the `public.expenses` table. Enable **Email** as a Supabase Auth provider
-and disable email confirmation in the provider settings so new accounts can sign in without
-email verification. The app uses email and password for sign-up and login; it does not send
-magic links or one-time email codes.
+and writes expenses in the `public.expenses` table. Enable anonymous sign-ins in Supabase Auth.
+The app asks for an email address, then creates an anonymous session immediately; it does not
+send an email or require a password. Expenses are looked up by the entered email, so entering
+the same address in another browser shows the same list. This address is not verified: anyone
+who enters it can view, add, change, or delete expenses associated with it. Do not use this
+approach for sensitive data.
 
-For a new database, create the table and per-user access policies:
+For a new database, create the table and email-keyed access policies:
 
 ```sql
 create table public.expenses (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  owner_email text not null,
   name text not null,
   emoji text not null default '🧾',
   paid_by text not null,
@@ -83,27 +86,55 @@ create table public.expenses (
 
 alter table public.expenses enable row level security;
 
-create policy "Users can read their expenses"
+create policy "Email users can read expenses"
   on public.expenses for select to authenticated
-  using ((select auth.uid()) = user_id);
+  using (lower(owner_email) = lower((select auth.jwt() -> 'user_metadata' ->> 'unverified_email')));
 
-create policy "Users can add their expenses"
+create policy "Email users can add expenses"
   on public.expenses for insert to authenticated
-  with check ((select auth.uid()) = user_id);
+  with check (lower(owner_email) = lower((select auth.jwt() -> 'user_metadata' ->> 'unverified_email')));
 
-create policy "Users can update their expenses"
+create policy "Email users can update expenses"
   on public.expenses for update to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
+  using (lower(owner_email) = lower((select auth.jwt() -> 'user_metadata' ->> 'unverified_email')))
+  with check (lower(owner_email) = lower((select auth.jwt() -> 'user_metadata' ->> 'unverified_email')));
 
-create policy "Users can delete their expenses"
+create policy "Email users can delete expenses"
   on public.expenses for delete to authenticated
-  using ((select auth.uid()) = user_id);
+  using (lower(owner_email) = lower((select auth.jwt() -> 'user_metadata' ->> 'unverified_email')));
 ```
 
-For an existing expenses table, add and backfill `user_id` for existing rows before making it
-`not null`, then enable row-level security and create the policies above. Expenses are only
-queried and modified for the signed-in user's ID.
+For an existing expenses table, add `owner_email`, then backfill it from the existing
+auth user's metadata (or `auth.users.email` for verified accounts) before making it `not null`:
+
+```sql
+alter table public.expenses add column if not exists owner_email text;
+
+update public.expenses as expense
+set owner_email = lower(coalesce(
+  auth_user.raw_user_meta_data ->> 'unverified_email',
+  auth_user.email
+))
+from auth.users as auth_user
+where expense.user_id = auth_user.id
+  and expense.owner_email is null;
+
+select count(*) as expenses_without_owner_email
+from public.expenses
+where owner_email is null;
+
+-- After resolving any rows returned above:
+alter table public.expenses alter column owner_email set not null;
+
+drop policy if exists "Users can read their expenses" on public.expenses;
+drop policy if exists "Users can add their expenses" on public.expenses;
+drop policy if exists "Users can update their expenses" on public.expenses;
+drop policy if exists "Users can delete their expenses" on public.expenses;
+```
+
+Resolve any remaining rows before setting `owner_email` to `not null`, then create the
+email-keyed policies above. Existing policies based on `user_id = auth.uid()` would prevent
+access from a different anonymous session using the same email.
 
 ---
 
