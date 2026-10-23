@@ -122,15 +122,16 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GROK_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json({
-        error: { code: 'NO_GEMINI_API_KEY', message: 'GEMINI_API_KEY is missing.' },
+        error: { code: 'NO_GROK_API_KEY', message: 'GROK_API_KEY is missing.' },
         source: 'config',
       }, { status: 500 });
     }
 
+    const model = process.env.GROK_MODEL || 'grok-3-mini';
     const prompt = `
 You are a receipt parser. Read the user's sentence and return JSON only.
 
@@ -147,36 +148,35 @@ Rules:
 Sentence: ${cleanText}
 `;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0,
-            maxOutputTokens: 256,
-          },
-        }),
-      }
-    );
+    const response = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+        temperature: 0,
+        max_tokens: 256,
+      }),
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
       return NextResponse.json({
         error: {
-          code: 'GEMINI_API_ERROR',
+          code: 'GROK_API_ERROR',
           httpStatus: response.status,
-          message: errorText || 'Gemini request failed.',
+          message: errorText || 'Grok request failed.',
         },
-        source: 'gemini',
+        source: 'grok',
       }, { status: response.status });
     }
 
     const data = await response.json();
-    const raw = data?.candidates?.[0]?.content?.parts?.map((part) => part.text).join('') || '';
+    const raw = data?.choices?.[0]?.message?.content || '';
     const parsed = extractJsonObject(raw) || {};
     const normalized = normalizeExpenseResult(parsed, cleanText);
 
@@ -188,7 +188,7 @@ Sentence: ${cleanText}
         paidBy: normalized.paidBy,
         amount: normalized.amount,
       },
-      source: 'gemini',
+      source: 'grok',
     });
   } catch (error) {
     return NextResponse.json({

@@ -59,6 +59,13 @@ git push
 > doc. Secrets go in Vercel's **Environment Variables** (and in `.env.local` locally, which is
 > git-ignored).
 
+## Natural-language expense parsing
+
+The natural-language expense input uses xAI's Grok API from the server. Set `GROK_API_KEY` in
+`.env.local` for local development and in Vercel's Environment Variables for deployment. The
+key is only used by the API route and is never sent to the browser. The model defaults to
+`grok-3-mini`; optionally set `GROK_MODEL` to another model enabled for your xAI account.
+
 ## Supabase expenses
 
 Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `.env.local` for local

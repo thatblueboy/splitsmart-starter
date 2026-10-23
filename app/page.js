@@ -725,7 +725,11 @@ export default function Home() {
           </div>
         </section>
 
-        <section style={styles.section}>
+        <section style={{ ...styles.section, ...styles.entryMethod }}>
+          <div style={styles.entryMethodTitle}>Add with natural language</div>
+          <div style={styles.entryMethodDescription}>
+            Describe the expense in a sentence, for example “Dinner for 1800 split 4 ways.”
+          </div>
           <div style={styles.addRow}>
             <input
               style={styles.input}
@@ -738,7 +742,17 @@ export default function Home() {
           </div>
         </section>
 
-        <section style={styles.section}>
+        <div style={styles.methodDivider} aria-hidden="true">
+          <span style={styles.methodDividerLine} />
+          <strong>OR ENTER DETAILS</strong>
+          <span style={styles.methodDividerLine} />
+        </div>
+
+        <section style={{ ...styles.section, ...styles.entryMethod }}>
+          <div style={styles.entryMethodTitle}>Add manually</div>
+          <div style={styles.entryMethodDescription}>
+            Enter the expense name, amount, payer, and who will split it.
+          </div>
           <div style={styles.formGrid}>
             <input
               style={styles.input}
@@ -888,6 +902,11 @@ const styles = {
   section: { marginBottom: 18 },
   sectionHeader: { fontSize: 13, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.08, color: '#475569', marginBottom: 8 },
   peopleRow: { display: 'flex', gap: 10, marginBottom: 10 },
+  entryMethod: { border: '1px solid #dbe2ef', borderRadius: 16, padding: 14, background: '#f8fafc' },
+  entryMethodTitle: { color: '#0f172a', fontSize: 15, fontWeight: 800, marginBottom: 4 },
+  entryMethodDescription: { color: '#64748b', fontSize: 12, lineHeight: 1.5, marginBottom: 12 },
+  methodDivider: { display: 'flex', alignItems: 'center', gap: 10, margin: '-4px 0 14px', color: '#64748b', fontSize: 10, letterSpacing: 0.08 },
+  methodDividerLine: { height: 1, flex: 1, background: '#e2e8f0' },
   authFields: { display: 'grid', gap: 10 },
   authNotice: { color: '#64748b', fontSize: 12, lineHeight: 1.5, marginTop: 10 },
   identityWarning: { background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 12, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, marginBottom: 14 },
