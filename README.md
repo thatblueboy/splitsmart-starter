@@ -63,9 +63,10 @@ git push
 
 Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `.env.local` for local
 development and in the Vercel project’s Environment Variables for deployment. The app reads
-and writes expenses in the `public.expenses` table. Enable **Email** as a Supabase Auth provider,
-and add your local and deployed app URLs to Supabase Auth's allowed redirect URLs. The app
-requests an email magic link and returns users to the app's current origin.
+and writes expenses in the `public.expenses` table. Enable **Email** as a Supabase Auth provider
+and disable email confirmation in the provider settings so new accounts can sign in without
+email verification. The app uses email and password for sign-up and login; it does not send
+magic links or one-time email codes.
 
 For a new database, create the table and per-user access policies:
 

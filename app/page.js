@@ -11,6 +11,21 @@ const STORAGE_KEYS = {
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
+function getErrorMessage(error) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const parts = [
+      error.message,
+      error.details,
+      error.hint,
+      error.code ? `code ${error.code}` : '',
+    ].filter((part) => typeof part === 'string' && part);
+    if (parts.length) return parts.join(' — ');
+  }
+  return 'Unknown error';
+}
+
 function normalizeExpense(row) {
   return {
     id: row.id,
@@ -71,6 +86,8 @@ export default function Home() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authMode, setAuthMode] = useState('signin');
   const [authMessage, setAuthMessage] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [expenses, setExpenses] = useState([]);
@@ -88,7 +105,7 @@ export default function Home() {
     try {
       supabase = getSupabaseClient();
     } catch (clientError) {
-      setError(`Could not initialize Supabase: ${clientError instanceof Error ? clientError.message : 'Unknown error'}`);
+      setError(`Could not initialize Supabase: ${getErrorMessage(clientError)}`);
       setAuthLoading(false);
       return undefined;
     }
@@ -115,7 +132,7 @@ export default function Home() {
       setAuthLoading(false);
     }).catch((sessionError) => {
       if (!mounted) return;
-      setError(`Could not check sign-in status: ${sessionError instanceof Error ? sessionError.message : 'Unknown error'}`);
+      setError(`Could not check sign-in status: ${getErrorMessage(sessionError)}`);
       setAuthLoading(false);
     });
 
@@ -163,7 +180,7 @@ export default function Home() {
         if (!cancelled) setExpenses((data || []).map(normalizeExpense));
       } catch (loadError) {
         if (!cancelled) {
-          setError(`Could not load expenses: ${loadError instanceof Error ? loadError.message : 'Unknown error'}`);
+          setError(`Could not load expenses: ${getErrorMessage(loadError)}`);
         }
       } finally {
         if (!cancelled) setExpensesLoading(false);
@@ -284,37 +301,43 @@ export default function Home() {
         setExpenses(updatedExpenses);
         setError('');
       } catch (updateError) {
-        setError(`Could not update expenses for ${person}: ${updateError instanceof Error ? updateError.message : 'Unknown error'}`);
+        setError(`Could not update expenses for ${person}: ${getErrorMessage(updateError)}`);
       }
     };
 
     persistChanges();
   };
 
-  const sendMagicLink = async (event) => {
+  const submitAuth = async (event) => {
     event.preventDefault();
     const normalizedEmail = email.trim();
-    if (!normalizedEmail) {
-      setError('Enter your email address to receive a sign-in link.');
-      return;
-    }
 
     setAuthBusy(true);
     setError('');
     setAuthMessage('');
 
     try {
-      const { error: signInError } = await getSupabaseClient().auth.signInWithOtp({
-        email: normalizedEmail,
-        options: {
-          emailRedirectTo: window.location.origin,
-        },
-      });
+      const auth = getSupabaseClient().auth;
+      if (authMode === 'signup') {
+        const { data, error: signUpError } = await auth.signUp({
+          email: normalizedEmail,
+          password,
+        });
 
-      if (signInError) throw signInError;
-      setAuthMessage(`Check ${normalizedEmail} for your sign-in link.`);
-    } catch (signInError) {
-      setError(`Could not send sign-in link: ${signInError instanceof Error ? signInError.message : 'Unknown error'}`);
+        if (signUpError) throw signUpError;
+        if (!data.session) {
+          setAuthMessage('Account created, but email confirmation is enabled in Supabase. Disable it to sign in without a verification email.');
+        }
+      } else {
+        const { error: signInError } = await auth.signInWithPassword({
+          email: normalizedEmail,
+          password,
+        });
+
+        if (signInError) throw signInError;
+      }
+    } catch (authError) {
+      setError(`Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${getErrorMessage(authError)}`);
     } finally {
       setAuthBusy(false);
     }
@@ -328,7 +351,7 @@ export default function Home() {
       const { error: signOutError } = await getSupabaseClient().auth.signOut();
       if (signOutError) throw signOutError;
     } catch (signOutError) {
-      setError(`Could not sign out: ${signOutError instanceof Error ? signOutError.message : 'Unknown error'}`);
+      setError(`Could not sign out: ${getErrorMessage(signOutError)}`);
     } finally {
       setAuthBusy(false);
     }
@@ -373,7 +396,7 @@ export default function Home() {
         splitBetween: [manualExpense.paidBy],
       });
     } catch (insertError) {
-      setError(`Could not save expense: ${insertError instanceof Error ? insertError.message : 'Unknown error'}`);
+      setError(`Could not save expense: ${getErrorMessage(insertError)}`);
     }
   };
 
@@ -412,7 +435,7 @@ export default function Home() {
 
       setAiText('');
     } catch (err) {
-      setError(`CLIENT_ERROR: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setError(`CLIENT_ERROR: ${getErrorMessage(err)}`);
     }
   };
 
@@ -428,7 +451,7 @@ export default function Home() {
       setExpenses((current) => current.filter((expense) => expense.id !== id));
       setError('');
     } catch (deleteError) {
-      setError(`Could not delete expense: ${deleteError instanceof Error ? deleteError.message : 'Unknown error'}`);
+      setError(`Could not delete expense: ${getErrorMessage(deleteError)}`);
     }
   };
 
@@ -455,9 +478,11 @@ export default function Home() {
             {authLoading ? (
               <div style={styles.empty}>Checking sign-in status…</div>
             ) : (
-              <form onSubmit={sendMagicLink}>
-                <div style={styles.sectionHeader}>Sign in or create an account</div>
-                <div style={styles.peopleRow}>
+              <form onSubmit={submitAuth}>
+                <div style={styles.sectionHeader}>
+                  {authMode === 'signup' ? 'Create an account' : 'Sign in'}
+                </div>
+                <div style={styles.authFields}>
                   <input
                     style={styles.input}
                     type="email"
@@ -468,11 +493,33 @@ export default function Home() {
                     aria-label="Email address"
                     required
                   />
-                  <button type="submit" style={styles.primaryBtn} disabled={authBusy}>
-                    {authBusy ? 'Sending…' : 'Send link'}
+                  <input
+                    style={styles.input}
+                    type="password"
+                    autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder="Password"
+                    aria-label="Password"
+                    minLength={8}
+                    required
+                  />
+                  <button type="submit" style={styles.primaryBtnWide} disabled={authBusy}>
+                    {authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : 'Sign in'}
                   </button>
                 </div>
                 {authMessage && <div style={styles.successBox}>{authMessage}</div>}
+                <button
+                  type="button"
+                  style={styles.authToggle}
+                  onClick={() => {
+                    setAuthMode((current) => current === 'signup' ? 'signin' : 'signup');
+                    setAuthMessage('');
+                    setError('');
+                  }}
+                >
+                  {authMode === 'signup' ? 'Already have an account? Sign in' : 'New here? Create an account'}
+                </button>
               </form>
             )}
           </section>
@@ -667,6 +714,8 @@ const styles = {
   section: { marginBottom: 18 },
   sectionHeader: { fontSize: 13, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.08, color: '#475569', marginBottom: 8 },
   peopleRow: { display: 'flex', gap: 10, marginBottom: 10 },
+  authFields: { display: 'grid', gap: 10 },
+  authToggle: { border: 'none', background: 'transparent', color: '#1d4ed8', padding: '10px 0 0', fontSize: 13, cursor: 'pointer' },
   addRow: { display: 'flex', gap: 10 },
   formGrid: { display: 'grid', gap: 10 },
   input: {
