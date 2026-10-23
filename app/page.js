@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { computeBalances, settleUp } from '../lib/split';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
@@ -136,6 +136,7 @@ export default function Home() {
     splitBetween: [],
   });
   const [error, setError] = useState('');
+  const authIdentityRef = useRef(null);
   const ownerEmail = typeof user?.user_metadata?.unverified_email === 'string'
     ? user.user_metadata.unverified_email.trim().toLowerCase()
     : '';
@@ -161,14 +162,25 @@ export default function Home() {
       setAuthLoading(false);
     }, 15000);
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
       clearTimeout(sessionTimeout);
-      setUser(session?.user || null);
+      if (event === 'TOKEN_REFRESHED') return;
+
+      const nextUser = session?.user || null;
+      const nextIdentity = nextUser
+        ? `${nextUser.id}:${nextUser.user_metadata?.unverified_email || ''}`
+        : '';
+      if (authIdentityRef.current === nextIdentity) {
+        setAuthLoading(false);
+        return;
+      }
+
+      authIdentityRef.current = nextIdentity;
+      setUser(nextUser);
       setShowGroupPicker(true);
       setExpenses([]);
       setGroupMembers([]);
-      setExpensesLoading(Boolean(session?.user));
       setAuthLoading(false);
       setError('');
     });
@@ -179,9 +191,15 @@ export default function Home() {
       if (sessionError) {
         setError(`Could not check sign-in status: ${sessionError.message}`);
       }
-      setUser(session?.user || null);
-      setShowGroupPicker(true);
-      setExpensesLoading(Boolean(session?.user));
+      const nextUser = session?.user || null;
+      const nextIdentity = nextUser
+        ? `${nextUser.id}:${nextUser.user_metadata?.unverified_email || ''}`
+        : '';
+      if (authIdentityRef.current !== nextIdentity) {
+        authIdentityRef.current = nextIdentity;
+        setUser(nextUser);
+        setShowGroupPicker(true);
+      }
       setAuthLoading(false);
     }).catch((sessionError) => {
       if (!mounted) return;
@@ -636,9 +654,6 @@ export default function Home() {
 
         {user && (
           <>
-        <div style={styles.identityWarning}>
-          Group membership is restored by the entered email. Email addresses are not verified, so anyone entering an address can access its groups.
-        </div>
         {showGroupPicker || !activeGroupId ? (
         <section style={styles.section}>
           <div style={styles.sectionHeader}>Choose a group</div>
@@ -771,12 +786,11 @@ export default function Home() {
         </section>
 
         <section style={styles.section}>
+          <div style={styles.sectionHeader}>Expenses</div>
           <div style={styles.list}>
-            {expensesLoading ? (
-              <div style={styles.empty}>Loading expenses…</div>
-            ) : expenses.length === 0 ? (
+            {!expensesLoading && expenses.length === 0 ? (
               <div style={styles.empty}>No expenses yet.</div>
-            ) : (
+            ) : !expensesLoading && (
               expenses.map((expense) => (
                 <div key={expense.id} style={styles.item}>
                   <div style={styles.itemEmoji}>{expense.emoji || '🧾'}</div>
@@ -785,7 +799,14 @@ export default function Home() {
                     <div style={styles.itemMeta}>paid by {expense.paidBy} · split {expense.splitBetween?.join(', ') || 'n/a'}</div>
                   </div>
                   <div style={styles.itemAmount}>{inr(expense.amount)}</div>
-                  <button style={styles.remove} onClick={() => removeExpense(expense.id)} aria-label={`Remove ${expense.name}`}>×</button>
+                  <button
+                    type="button"
+                    style={styles.remove}
+                    onClick={() => removeExpense(expense.id)}
+                    aria-label={`Remove ${expense.name}`}
+                  >
+                    ×
+                  </button>
                 </div>
               ))
             )}
