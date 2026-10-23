@@ -6,7 +6,8 @@ import { getSupabaseClient } from '../lib/supabaseClient';
 
 const DEFAULT_PEOPLE = ['Aisha', 'Raj', 'Priya', 'You'];
 const STORAGE_KEYS = {
-  people: 'splitsmart.people',
+  selectedGroup: 'splitsmart.selectedGroup',
+  peoplePrefix: 'splitsmart.people.',
 };
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -89,6 +90,12 @@ export default function Home() {
   const [authBusy, setAuthBusy] = useState(false);
   const [expenses, setExpenses] = useState([]);
   const [expensesLoading, setExpensesLoading] = useState(false);
+  const [peopleGroupId, setPeopleGroupId] = useState('');
+  const [groups, setGroups] = useState([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [activeGroupId, setActiveGroupId] = useState('');
+  const [newGroupName, setNewGroupName] = useState('');
+  const [joinCode, setJoinCode] = useState('');
   const [manualExpense, setManualExpense] = useState({
     description: '',
     amount: '',
@@ -150,45 +157,75 @@ export default function Home() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadGroups = async (preferredGroupId = activeGroupId) => {
+    if (!user) return;
+    setGroupsLoading(true);
 
     try {
-      const savedPeople = JSON.parse(localStorage.getItem(STORAGE_KEYS.people) || 'null');
+      const { data, error: groupsError } = await getSupabaseClient()
+        .from('groups')
+        .select('id, name, join_code, created_at')
+        .order('created_at', { ascending: true });
 
-      if (Array.isArray(savedPeople) && savedPeople.length > 0) {
-        setPeople(savedPeople);
-      }
-    } catch {
-      // Ignore corrupted local storage data.
+      if (groupsError) throw groupsError;
+
+      const nextGroups = data || [];
+      const selected = nextGroups.some((group) => group.id === preferredGroupId)
+        ? preferredGroupId
+        : nextGroups[0]?.id || '';
+      setGroups(nextGroups);
+      setActiveGroupId(selected);
+      if (selected) localStorage.setItem(STORAGE_KEYS.selectedGroup, selected);
+      else localStorage.removeItem(STORAGE_KEYS.selectedGroup);
+    } catch (groupsError) {
+      setError(`Could not load groups: ${getErrorMessage(groupsError)}`);
+    } finally {
+      setGroupsLoading(false);
     }
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  };
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user || !ownerEmail) {
+    if (!user) {
+      setGroups([]);
+      setActiveGroupId('');
+      setGroupsLoading(false);
+      setPeople(DEFAULT_PEOPLE);
+      setPeopleGroupId('');
+      return;
+    }
+
+    let preferredGroupId = '';
+    try {
+      preferredGroupId = localStorage.getItem(STORAGE_KEYS.selectedGroup) || '';
+    } catch (storageError) {
+      setError(`Could not read the selected group: ${getErrorMessage(storageError)}`);
+    }
+    loadGroups(preferredGroupId);
+  }, [authLoading, user]);
+
+  useEffect(() => {
+    if (!user || !activeGroupId) {
       setExpenses([]);
       setExpensesLoading(false);
       return;
     }
 
     let cancelled = false;
+    setExpensesLoading(true);
     const loadExpenses = async () => {
       try {
         const { data, error: loadError } = await getSupabaseClient()
           .from('expenses')
           .select('*')
-          .eq('owner_email', ownerEmail);
+          .eq('group_id', activeGroupId);
 
         if (loadError) throw loadError;
         if (!cancelled) setExpenses((data || []).map(normalizeExpense));
       } catch (loadError) {
         if (!cancelled) {
-          setError(`Could not load expenses: ${getErrorMessage(loadError)}`);
+          setExpenses([]);
+          setError(`Could not load group expenses: ${getErrorMessage(loadError)}`);
         }
       } finally {
         if (!cancelled) setExpensesLoading(false);
@@ -196,17 +233,34 @@ export default function Home() {
     };
 
     loadExpenses();
-
     return () => {
       cancelled = true;
     };
-  }, [authLoading, ownerEmail, user]);
+  }, [activeGroupId, user]);
 
   useEffect(() => {
+    if (!activeGroupId) {
+      setPeople(DEFAULT_PEOPLE);
+      setPeopleGroupId('');
+      return;
+    }
+
     try {
-      localStorage.setItem(STORAGE_KEYS.people, JSON.stringify(people));
+      const savedPeople = JSON.parse(localStorage.getItem(`${STORAGE_KEYS.peoplePrefix}${activeGroupId}`) || 'null');
+      setPeople(Array.isArray(savedPeople) && savedPeople.length ? savedPeople : DEFAULT_PEOPLE);
+      setPeopleGroupId(activeGroupId);
+    } catch {
+      setPeople(DEFAULT_PEOPLE);
+      setPeopleGroupId(activeGroupId);
+    }
+  }, [activeGroupId]);
+
+  useEffect(() => {
+    if (!activeGroupId || peopleGroupId !== activeGroupId) return;
+    try {
+      localStorage.setItem(`${STORAGE_KEYS.peoplePrefix}${activeGroupId}`, JSON.stringify(people));
     } catch {}
-  }, [people]);
+  }, [activeGroupId, people, peopleGroupId]);
 
   useEffect(() => {
     setManualExpense((current) => {
@@ -227,12 +281,14 @@ export default function Home() {
 
   const insertExpense = async (expense) => {
     if (!user || !ownerEmail) throw new Error('Enter your email before adding an expense.');
+    if (!activeGroupId) throw new Error('Create or join a group before adding an expense.');
 
     const { data, error: insertError } = await getSupabaseClient()
       .from('expenses')
       .insert({
         user_id: user.id,
         owner_email: ownerEmail,
+        group_id: activeGroupId,
         name: expense.name,
         emoji: expense.emoji || '🧾',
         paid_by: expense.paidBy,
@@ -301,7 +357,7 @@ export default function Home() {
               split_between: expense.splitBetween,
             })
                 .eq('id', expense.id)
-                .eq('owner_email', ownerEmail);
+                .eq('group_id', activeGroupId);
 
           if (updateError) throw updateError;
         }
@@ -315,6 +371,78 @@ export default function Home() {
     };
 
     persistChanges();
+  };
+
+  const createGroup = async (event) => {
+    event.preventDefault();
+    const name = newGroupName.trim();
+    if (!name || !user) return;
+
+    setAuthBusy(true);
+    setError('');
+    try {
+      const supabase = getSupabaseClient();
+      const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      if (!currentUser) throw new Error('No authenticated Supabase user was found. Reload and continue again.');
+
+      const { data: group, error: createError } = await supabase
+        .from('groups')
+        .insert({ name, created_by: currentUser.id })
+        .select('id, name, join_code, created_at')
+        .single();
+
+      if (createError) throw createError;
+
+      const { error: membershipError } = await supabase
+        .from('group_members')
+        .insert({ group_id: group.id, user_id: currentUser.id });
+
+      if (membershipError) {
+        throw new Error(`Group was created but membership could not be added: ${getErrorMessage(membershipError)}`);
+      }
+
+      setNewGroupName('');
+      await loadGroups(group.id);
+    } catch (createError) {
+      setError(`Could not create group: ${getErrorMessage(createError)}`);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const joinGroup = async (event) => {
+    event.preventDefault();
+    const code = joinCode.trim().toUpperCase();
+    if (!code) return;
+
+    setAuthBusy(true);
+    setError('');
+    try {
+      const { data: groupId, error: joinError } = await getSupabaseClient()
+        .rpc('join_group', { code });
+
+      if (joinError) throw joinError;
+      if (!groupId) throw new Error('The join function did not return a group ID.');
+
+      setJoinCode('');
+      await loadGroups(groupId);
+    } catch (joinError) {
+      setError(`Could not join group: ${getErrorMessage(joinError)}`);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const selectGroup = (groupId) => {
+    setActiveGroupId(groupId);
+    setExpenses([]);
+    setExpensesLoading(Boolean(groupId));
+    try {
+      localStorage.setItem(STORAGE_KEYS.selectedGroup, groupId);
+    } catch (storageError) {
+      setError(`Could not save the selected group: ${getErrorMessage(storageError)}`);
+    }
   };
 
   const continueWithEmail = async (event) => {
@@ -441,7 +569,7 @@ export default function Home() {
         .from('expenses')
         .delete()
         .eq('id', id)
-        .eq('owner_email', ownerEmail);
+        .eq('group_id', activeGroupId);
 
       if (deleteError) throw deleteError;
       setExpenses((current) => current.filter((expense) => expense.id !== id));
@@ -492,8 +620,8 @@ export default function Home() {
                   </button>
                 </div>
                 <div style={styles.authNotice}>
-                  No email will be sent. Anyone who enters the same unverified address can view and change
-                  expenses saved under it.
+                  No email will be sent. This address is unverified; group membership is tied to the
+                  anonymous browser session, not the email address.
                 </div>
               </form>
             )}
@@ -503,8 +631,60 @@ export default function Home() {
         {user && (
           <>
         <div style={styles.identityWarning}>
-          Expenses for <strong>{ownerEmail || 'this session'}</strong> are shared by entered email. Email ownership is not verified.
+          Group access is tied to this anonymous session. Using the same email on another browser does not transfer group membership.
         </div>
+        <section style={styles.section}>
+          <div style={styles.sectionHeader}>Your groups</div>
+          {groups.length > 0 && (
+            <>
+              <select
+                style={styles.select}
+                value={activeGroupId}
+                onChange={(event) => selectGroup(event.target.value)}
+                aria-label="Current group"
+              >
+                {groups.map((group) => (
+                  <option key={group.id} value={group.id}>{group.name}</option>
+                ))}
+              </select>
+              {activeGroupId && (
+                <div style={styles.groupCode}>
+                  Invite code: <strong>{groups.find((group) => group.id === activeGroupId)?.join_code}</strong>
+                </div>
+              )}
+            </>
+          )}
+          {groupsLoading && <div style={styles.empty}>Loading groups…</div>}
+          {!groupsLoading && groups.length === 0 && (
+            <div style={styles.empty}>Create a group or join one with an invite code.</div>
+          )}
+          <div style={styles.groupForms}>
+            <form onSubmit={createGroup} style={styles.groupForm}>
+              <input
+                style={styles.input}
+                value={newGroupName}
+                onChange={(event) => setNewGroupName(event.target.value)}
+                placeholder="New group name"
+                aria-label="New group name"
+                required
+              />
+              <button type="submit" style={styles.primaryBtn} disabled={authBusy}>Create</button>
+            </form>
+            <form onSubmit={joinGroup} style={styles.groupForm}>
+              <input
+                style={styles.input}
+                value={joinCode}
+                onChange={(event) => setJoinCode(event.target.value)}
+                placeholder="Group invite code"
+                aria-label="Group invite code"
+                required
+              />
+              <button type="submit" style={styles.primaryBtn} disabled={authBusy}>Join</button>
+            </form>
+          </div>
+        </section>
+        {activeGroupId && (
+          <>
         <section style={styles.section}>
           <div style={styles.peopleRow}>
             <input
@@ -595,8 +775,6 @@ export default function Home() {
           <button style={styles.primaryBtnWide} onClick={addManualExpense}>Save expense</button>
         </section>
 
-        {error && <div style={styles.errorBox}>{error}</div>}
-
         <section style={styles.section}>
           <div style={styles.list}>
             {expensesLoading ? (
@@ -653,6 +831,8 @@ export default function Home() {
         <div style={styles.total}>Total {inr(total)}</div>
           </>
         )}
+          </>
+        )}
         {error && <div style={styles.errorBox}>{error}</div>}
       </div>
     </main>
@@ -695,6 +875,9 @@ const styles = {
   authFields: { display: 'grid', gap: 10 },
   authNotice: { color: '#64748b', fontSize: 12, lineHeight: 1.5, marginTop: 10 },
   identityWarning: { background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 12, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, marginBottom: 14 },
+  groupCode: { color: '#475569', fontSize: 13, margin: '8px 0' },
+  groupForms: { display: 'grid', gap: 8, marginTop: 10 },
+  groupForm: { display: 'flex', gap: 8 },
   addRow: { display: 'flex', gap: 10 },
   formGrid: { display: 'grid', gap: 10 },
   input: {

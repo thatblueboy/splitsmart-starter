@@ -136,6 +136,56 @@ Resolve any remaining rows before setting `owner_email` to `not null`, then crea
 email-keyed policies above. Existing policies based on `user_id = auth.uid()` would prevent
 access from a different anonymous session using the same email.
 
+## Hour 6 — private groups
+
+Run the Hour 6 groups SQL from the course after the expense table is configured. It creates
+`groups`, `group_members`, `join_group(code)`, and adds `group_id` to expenses. This app then
+lets you create and switch groups, share a group's join code, join by code, and view/add/remove
+expenses only in the active group. The people list is saved locally per selected group.
+
+The supplied Hour 6 SQL needs these additions for the app's create/update flows. Run them in the
+SQL Editor after the Hour 6 SQL. The creator policy lets the app retrieve its new group before
+adding the creator as a member. The update policy is needed when editing expenses, such as
+removing someone from a split. Remove earlier email/user-only expense policies: PostgreSQL ORs
+permissive policies together, which would otherwise bypass group isolation.
+
+```sql
+drop policy if exists "creators can see their groups" on groups;
+create policy "creators can see their groups"
+  on groups for select to authenticated
+  using (created_by = auth.uid());
+
+drop policy if exists "update group expenses" on expenses;
+create policy "update group expenses"
+  on expenses for update to authenticated
+  using (is_group_member(group_id))
+  with check (is_group_member(group_id));
+
+drop policy if exists "Email users can read expenses" on expenses;
+drop policy if exists "Email users can add expenses" on expenses;
+drop policy if exists "Email users can update expenses" on expenses;
+drop policy if exists "Email users can delete expenses" on expenses;
+drop policy if exists "Users can read their expenses" on expenses;
+drop policy if exists "Users can add their expenses" on expenses;
+drop policy if exists "Users can update their expenses" on expenses;
+drop policy if exists "Users can delete their expenses" on expenses;
+```
+
+Existing expenses with `group_id is null` won't appear in a group. After creating a group, copy
+its UUID from the `groups` table and assign only the intended legacy rows in the SQL Editor,
+for example:
+
+```sql
+update expenses
+set group_id = 'YOUR-GROUP-UUID'
+where group_id is null
+  and owner_email = lower('you@example.com');
+```
+
+Membership belongs to the current Supabase anonymous user ID, not the unverified email label.
+To share a group, the other person signs in on their device and joins with the group's code.
+Typing the same email on another device does not transfer membership.
+
 ---
 
 ## What's inside
