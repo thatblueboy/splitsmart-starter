@@ -111,9 +111,15 @@ export default function Home() {
     }
 
     let mounted = true;
+    const sessionTimeout = setTimeout(() => {
+      if (!mounted) return;
+      setError('Could not check sign-in status: Supabase auth did not respond. Check your connection and reload the page.');
+      setAuthLoading(false);
+    }, 15000);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
+      clearTimeout(sessionTimeout);
       setUser(session?.user || null);
       setExpenses([]);
       setExpensesLoading(Boolean(session?.user));
@@ -123,6 +129,7 @@ export default function Home() {
 
     supabase.auth.getSession().then(({ data: { session }, error: sessionError }) => {
       if (!mounted) return;
+      clearTimeout(sessionTimeout);
       if (sessionError) {
         setError(`Could not check sign-in status: ${sessionError.message}`);
       }
@@ -131,12 +138,14 @@ export default function Home() {
       setAuthLoading(false);
     }).catch((sessionError) => {
       if (!mounted) return;
+      clearTimeout(sessionTimeout);
       setError(`Could not check sign-in status: ${getErrorMessage(sessionError)}`);
       setAuthLoading(false);
     });
 
     return () => {
       mounted = false;
+      clearTimeout(sessionTimeout);
       subscription.unsubscribe();
     };
   }, []);
